@@ -6,7 +6,21 @@
 
 [advisories]
 yanked = "deny"
-ignore = []
+# RUSTSEC-2026-0543 -- chrono is unmaintained. Not a vulnerability: a notice that
+# fixes will stop coming. Checked rather than waved through, as eon-stream-engine
+# did for the same advisory. Two paths, neither parses outside text:
+# - pdfium-render 0.9.6 depends on chrono unconditionally, and uses it only to
+#   *format* a date when setting an annotation's or form field's creation or
+#   modification date (utils.rs `date_time_to_pdf_string`). This crate only reads
+#   PDFs (text and page pictures) and never calls those setters.
+# - calamine's `dates` feature: we call only `ExcelDateTime::as_datetime`
+#   (engine/core.rs), which adds the cell's serial number to a fixed epoch --
+#   arithmetic, no string parsing. `as_date`/`as_time`, which parse strings with
+#   chrono, are not called.
+# There is no upgrade: the advisory lists no safe version. Remove this when
+# pdfium-render moves to another time crate, or drop `dates` and convert the
+# serial number here if calamine stays on chrono alone.
+ignore = ["RUSTSEC-2026-0543"]
 
 [licenses]
 # Our own crate is copyleft and unpublished; the allow list below governs
