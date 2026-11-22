@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt · clippy · test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      # Detection, routing, the core's own conversions, the result read-back.
+      - run: cargo test
+
+  matrix:
+    name: real files through the real engines (windows)
+    # Every family converted with the pinned engines, each result checked by its
+    # content and, for media, by the streams it holds.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      # The engines are pinned by SHA-256 in tools.rs; a new pin is a new key.
+      - uses: actions/cache@v4
+        with:
+          path: target/converter-test-tools
+          key: engines-${{ runner.os }}-${{ hashFiles('src/tools.rs') }}
+      - run: cargo test --test matrix -- --ignored --nocapture
+
+  invariants:
+    name: project invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No telemetry (madde 36)
+        run: |
+          if grep -rIn -iE 'telemetry|analytics|sentry|mixpanel|posthog' src Cargo.toml; then
+            echo "::error::telemetry-shaped code found (madde 36)"
+            exit 1
+          fi
+      - name: No GUI dependency in the core
+        run: |
+          if grep -nE '^\s*(tauri|wry|tao|winit|gtk|egui|iced|slint|druid)\b' Cargo.toml; then
+            echo "::error::the core never takes a GUI dependency"
+            exit 1
+          fi
+      - name: A library, not a service
+        run: |
+          if grep -nE '^\[\[bin\]\]' Cargo.toml || [ -e src/main.rs ]; then
+            echo "::error::eon-converter-core has no binary target"
+            exit 1
+          fi
+          if grep -rnE 'TcpListener|UdpSocket|UnixListener' src; then
+            echo "::error::eon-converter-core does not listen on anything"
+            exit 1
+          fi
+      - name: Engines are fetched, never bundled
+        run: |
+          if git ls-files | grep -iE '\.(exe|dll|so|dylib|7z)$'; then
+            echo "::error::an engine binary is in the repository"
+            exit 1
+          fi
+
+  deny:
+    name: licences · advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check all
+
+  reuse:
+    name: licence headers (REUSE)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fsfe/reuse-action@v5
+
+  dco:
+    name: signed-off commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Every commit must carry Signed-off-by
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          missing=0
+          while read -r sha; do
+            if ! git log -1 --format=%B "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::missing Signed-off-by: $(git log -1 --oneline "$sha")"
+              missing=1
+            fi
+          done < <(git rev-list "$base..$head")
+          exit $missing

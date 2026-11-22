@@ -1,0 +1,27 @@
+EON Converter core
+Copyright (c) 2026 EON contributors
+
+This product is licensed under GPL-3.0-or-later WITH the EON Module ABI
+Exception 1.0 (see LICENSE and LICENSE-EXCEPTION.md).
+
+Third-party components (direct dependencies; full inventory: cargo deny check licenses)
+
+  tokio, reqwest, serde, serde_json, sha2, chrono   MIT OR Apache-2.0 (tokio: MIT)
+  rustls (ring provider)   Apache-2.0 OR ISC OR MIT
+  infer                    MIT
+  encoding_rs              (Apache-2.0 OR MIT) AND BSD-3-Clause
+  image                    MIT OR Apache-2.0
+  csv, toml, serde_yaml_ng, quick-xml   MIT OR Apache-2.0 (csv: Unlicense OR MIT)
+  calamine                 MIT
+  rust_xlsxwriter          MIT OR Apache-2.0
+  zip, tar, flate2         MIT (zip), MIT OR Apache-2.0
+  pdfium-render            MIT OR Apache-2.0
+
+Engines fetched at run time, never shipped with this crate (each under its own licence):
+
+  FFmpeg (BtbN static GPL build)   GPL-3.0
+  Pandoc                           GPL-2.0-or-later
+  Typst                            Apache-2.0
+  PDFium (bblanchon build)         BSD-3-Clause / Apache-2.0
+  ImageMagick (portable)           ImageMagick License
+  LibreOffice, Calibre             used only when installed by the person
