@@ -15,7 +15,9 @@
 use crate::Error;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// The engines the core can run. `Core` is the core itself: nothing to fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -175,10 +177,16 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Byte progress of a fetch: received so far, and the whole when the server says.
+pub type FetchProgress<'a> = &'a (dyn Fn(u64, Option<u64>) + Send + Sync);
+
 /// Where the engines live.
 #[derive(Debug, Clone)]
 pub struct Tools {
     dir: PathBuf,
+    /// One fetch per engine at a time: two conversions that need FFmpeg on its
+    /// first use must not unpack into the same folder.
+    fetching: Arc<Mutex<HashMap<Engine, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 /// What the application shows about an engine.
@@ -197,6 +205,7 @@ impl Tools {
     pub fn new(data_dir: &Path) -> Self {
         Tools {
             dir: data_dir.join("tools"),
+            fetching: Arc::default(),
         }
     }
 
@@ -245,6 +254,28 @@ impl Tools {
 
     /// The engine, fetched and checked if it is not here yet.
     pub async fn ensure(&self, client: &reqwest::Client, engine: Engine) -> Result<PathBuf, Error> {
+        self.ensure_with(client, engine, &|_, _| {}).await
+    }
+
+    /// As `ensure`, reporting the bytes of the fetch as they arrive.
+    pub async fn ensure_with(
+        &self,
+        client: &reqwest::Client,
+        engine: Engine,
+        progress: FetchProgress<'_>,
+    ) -> Result<PathBuf, Error> {
+        if let Some(found) = self.find(engine) {
+            return Ok(found);
+        }
+        let lock = Arc::clone(
+            self.fetching
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(engine)
+                .or_default(),
+        );
+        let _one_at_a_time = lock.lock().await;
+        // Another conversion may have fetched it while this one waited.
         if let Some(found) = self.find(engine) {
             return Ok(found);
         }
@@ -267,7 +298,7 @@ impl Tools {
         tokio::fs::create_dir_all(&work).await.map_err(io)?;
         let archive_name = pin.url.rsplit('/').next().unwrap_or("archive");
         let archive = work.join(archive_name);
-        download(client, pin.url, pin.sha256, &archive).await?;
+        fetch_file(client, pin.url, pin.sha256, &archive, progress).await?;
         unpack(&archive, &work).await?;
         let _ = tokio::fs::remove_file(&archive).await;
         // The program's folder becomes the engine's home, with everything beside it
@@ -316,13 +347,14 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Stream `url` into `path`, hashing as it goes. Kept only if the SHA-256 is the
-/// pinned one.
-async fn download(
+/// Stream `url` into `path`, hashing as it goes, reporting the bytes received.
+/// The file is kept only if its SHA-256 is `sha256`; otherwise it is deleted.
+pub async fn fetch_file(
     client: &reqwest::Client,
     url: &str,
     sha256: &str,
     path: &Path,
+    progress: FetchProgress<'_>,
 ) -> Result<(), Error> {
     use tokio::io::AsyncWriteExt;
     let mut response = client
@@ -333,6 +365,9 @@ async fn download(
     if !response.status().is_success() {
         return Err(Error::Network(format!("{url}: {}", response.status())));
     }
+    let total = response.content_length();
+    let mut received = 0u64;
+    progress(received, total);
     let mut file = tokio::fs::File::create(path).await.map_err(io)?;
     let mut hasher = Sha256::new();
     while let Some(chunk) = response
@@ -342,6 +377,8 @@ async fn download(
     {
         hasher.update(&chunk);
         file.write_all(&chunk).await.map_err(io)?;
+        received += chunk.len() as u64;
+        progress(received, total);
     }
     file.flush().await.map_err(io)?;
     drop(file);

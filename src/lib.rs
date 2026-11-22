@@ -133,8 +133,12 @@ pub struct Target {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "stage", rename_all = "lowercase")]
 pub enum Progress {
-    /// An engine is being fetched.
-    Fetching { engine: Engine },
+    /// An engine is being fetched: bytes received, and the whole when known.
+    Fetching {
+        engine: Engine,
+        received: u64,
+        total: Option<u64>,
+    },
     /// Step `step` of `steps`; `fraction` is the whole conversion's, 0 to 1.
     Converting {
         step: usize,
@@ -284,6 +288,15 @@ impl Converter {
         self.tools.ensure(&self.client, engine).await
     }
 
+    /// As `fetch`, reporting the bytes as they arrive.
+    pub async fn fetch_with(
+        &self,
+        engine: Engine,
+        progress: tools::FetchProgress<'_>,
+    ) -> Result<PathBuf, Error> {
+        self.tools.ensure_with(&self.client, engine, progress).await
+    }
+
     /// Convert `input` to `to`, into `folder` (the input's own when `None`). The
     /// result gets the input's name with the new extension, made unique. Several
     /// page pictures make a folder of that name.
@@ -345,10 +358,16 @@ impl Converter {
                 return Err(Error::Cancelled);
             }
             if !self.ready(edge.engine) {
-                progress(Progress::Fetching {
-                    engine: edge.engine,
-                });
-                self.tools.ensure(&self.client, edge.engine).await?;
+                let engine = edge.engine;
+                self.tools
+                    .ensure_with(&self.client, engine, &|received, total| {
+                        progress(Progress::Fetching {
+                            engine,
+                            received,
+                            total,
+                        });
+                    })
+                    .await?;
             }
             let from = format::by_id(edge.from).ok_or_else(|| Error::Invalid(edge.from.into()))?;
             let to = format::by_id(edge.to).ok_or_else(|| Error::Invalid(edge.to.into()))?;

@@ -5,6 +5,15 @@ SPDX-FileCopyrightText: 2026 EON contributors
 
 # Changelog
 
+## v0.0.1 — 22 November 2026
+
+For the window, which shows a fetch as a bar.
+
+- **`Progress::Fetching` carries bytes:** `received`, and `total` when the server says.
+  `Converter::fetch_with` and `tools::fetch_file` report them as they arrive.
+- **One fetch per engine at a time.** Two conversions that need the same engine on its
+  first use no longer unpack into the same folder; the second waits and uses the first's.
+
 ## v0.0.0 — 22 November 2026
 
 The first version (plan madde 48).
